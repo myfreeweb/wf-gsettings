@@ -10,7 +10,9 @@
 #include <wayfire/debug.hpp>
 #include <wayfire/output.hpp>
 #include <wayfire/plugin.hpp>
+#include <wayfire/config-backend.hpp>
 #include <wayfire/util/log.hpp>
+#include <wayfire/config/file.hpp>
 
 struct conf_change {
 	std::string sec;
@@ -144,20 +146,33 @@ static void gsettings_loop(int fd) {
 
 static int handle_update(int fd, uint32_t /* mask */, void *data);
 
-struct gsettings_ctx : public wf::custom_data_t {
+class wayfire_gsettings : public wf::config_backend_t
+{
+  public:
 	std::thread loopthread;
 	int fd[2] = {0, 0};
 	wf::wl_timer sig_debounce;
+	wf::config::config_manager_t *config;
 
-	gsettings_ctx() {
+	void init(wl_display *display, wf::config::config_manager_t& config,
+		const std::string&) override
+	{
+		this->config = &config;
+		config = wf::config::build_configuration(
+			get_xml_dirs(), "", "");
+
 		pipe(fd);
 		loopthread = std::thread(gsettings_loop, fd[1]);
-		wl_event_loop_add_fd(wf::get_core().ev_loop, fd[0], WL_EVENT_READABLE, handle_update, this);
+		wl_event_loop_add_fd(wl_display_get_event_loop(display),
+			fd[0], WL_EVENT_READABLE, handle_update, this);
 	}
+
+    void load_settings() {
+    }
 };
 
 static int handle_update(int fd, uint32_t /* mask */, void *data) {
-	auto *ctx = reinterpret_cast<gsettings_ctx *>(data);
+	auto *ctx = reinterpret_cast<wayfire_gsettings *>(data);
 	char buff;
 	read(fd, &buff, 1);
 	while (!changes.empty()) {
@@ -165,7 +180,7 @@ static int handle_update(int fd, uint32_t /* mask */, void *data) {
 		// GSettings does not support underscores
 		std::replace(chg.key.begin(), chg.key.end(), '-', '_');
 		try {
-			auto opt = wf::get_core().config.get_section(chg.sec)->get_option(chg.key);
+			auto opt = ctx->config->get_section(chg.sec)->get_option(chg.key);
 			const auto *typ = g_variant_get_type(chg.val);
 			if (opt == nullptr) {
 				LOGI("GSettings update found nullptr opt: ", chg.sec.c_str(), "/", chg.key.c_str());
@@ -228,15 +243,4 @@ static int handle_update(int fd, uint32_t /* mask */, void *data) {
 	return 1;
 }
 
-// Plugins are per-output, this wrapper/data thing is for output independence
-struct wayfire_gsettings : public wf::plugin_interface_t {
-	void init() override {
-		if (!wf::get_core().has_data<gsettings_ctx>()) {
-			wf::get_core().store_data(std::make_unique<gsettings_ctx>());
-		}
-	}
-
-	bool is_unloadable() override { return false; }
-};
-
-DECLARE_WAYFIRE_PLUGIN(wayfire_gsettings);
+DECLARE_WAYFIRE_CONFIG_BACKEND(wayfire_gsettings);
