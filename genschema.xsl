@@ -38,13 +38,13 @@
 					<xsl:when test="@type = 'bool'">b</xsl:when>
 					<xsl:when test="@type = 'double'">d</xsl:when>
 					<xsl:when test="@type = 'color'">(dddd)</xsl:when>
-					<xsl:when test="@type = 'key' or @type = 'button' or @type = 'gesture' or @type = 'activator' or @type = 'string'">s</xsl:when>
+					<xsl:when test="@type = 'key' or @type = 'button' or @type = 'gesture' or @type = 'activator' or @type = 'output::mode' or @type = 'output::position' or @type = 'string'">s</xsl:when>
 					<xsl:when test="@type = 'dynamic_list'">a<xsl:choose>
 							<xsl:when test="type = 'int'">i</xsl:when>
 							<xsl:when test="type = 'bool'">b</xsl:when>
 							<xsl:when test="type = 'double'">d</xsl:when>
 							<xsl:when test="type = 'color'">(dddd)</xsl:when>
-							<xsl:when test="type = 'key' or type = 'button' or type = 'gesture' or type = 'activator' or type = 'string'">s</xsl:when>
+							<xsl:when test="type = 'key' or type = 'button' or type = 'gesture' or type = 'activator' or @type = 'output::mode' or @type = 'output::position' or type = 'string'">s</xsl:when>
 						</xsl:choose>
 					</xsl:when>
 				</xsl:choose>
@@ -58,7 +58,7 @@
 					<xsl:when test="default = 0 and @type = 'bool'">false</xsl:when>
 					<xsl:when test="default = 1 and @type = 'bool'">true</xsl:when>
 					<!-- TODO: make bool values lowercase -->
-					<xsl:when test="default and (@type = 'key' or @type = 'button' or @type = 'gesture' or @type = 'activator' or @type = 'string')">'<xsl:value-of select="default"/>'</xsl:when>
+					<xsl:when test="default and (@type = 'key' or @type = 'button' or @type = 'gesture' or @type = 'activator' or @type = 'output::mode' or @type = 'output::position' or @type = 'string')">'<xsl:value-of select="default"/>'</xsl:when>
 					<xsl:when test="default"><xsl:value-of select="default"/></xsl:when>
 					<xsl:when test="@type = 'int'">0</xsl:when>
 					<xsl:when test="@type = 'bool'">false</xsl:when>
