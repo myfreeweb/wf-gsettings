@@ -234,6 +234,7 @@ static int handle_update(int fd, uint32_t /* mask */, void *data) {
 	ctx->sig_debounce.set_timeout(69, []() {
 		wf::get_core().emit_signal("reload-config", nullptr);
 		LOGI("GSettings applied");
+		return false;  // disconnect
 	});
 	write(fd, "!", 1);
 	return 1;
