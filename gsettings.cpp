@@ -3,6 +3,8 @@
 #include <gio/gio.h>
 #include <unistd.h>
 
+#include <condition_variable>
+#include <mutex>
 #include <queue>
 #include <thread>
 #include <unordered_map>
@@ -23,14 +25,19 @@ struct conf_change {
 static std::unordered_map<std::string, GSettings *> gsets;
 static std::unordered_map<GSettings *, std::string> gsets_rev;
 static std::queue<conf_change> changes;
+static std::mutex init_mtx;
+static std::condition_variable init_cv;
+static bool init_done = false;
 
 static void gsettings_callback(GSettings *settings, gchar *key, gpointer user_data) {
 	int fd = (int)(intptr_t)user_data;
 	std::string skey(key);
 	changes.push(conf_change{gsets_rev[settings], skey, g_settings_get_value(settings, key)});
-	write(fd, "!", 1);
-	char buff;
-	read(fd, &buff, 1);
+	if (init_done) {
+		write(fd, "!", 1);
+		char buff;
+		read(fd, &buff, 1);
+	}
 }
 
 static void gsettings_update_schemas(int fd) {
@@ -121,7 +128,6 @@ static void gsettings_meta_callback(GSettings *settings, gchar *key, gpointer us
 }
 
 static void gsettings_loop(int fd) {
-	// XXX: not really safe to read the list from this secondary thread
 	usleep(100000);
 	auto *gctx = g_main_context_new();
 	g_main_context_push_thread_default(gctx);
@@ -141,10 +147,17 @@ static void gsettings_loop(int fd) {
 		}
 	}
 	gsettings_update_schemas(fd);
+	{
+		std::lock_guard<std::mutex> lk(init_mtx);
+		init_done = true;
+		init_cv.notify_all();
+	}
 	g_main_loop_run(loop);
 }
 
 static int handle_update(int fd, uint32_t /* mask */, void *data);
+class wayfire_gsettings;
+static void apply_update(const wayfire_gsettings *ctx);
 
 class wayfire_gsettings : public wf::config_backend_t {
  public:
@@ -162,50 +175,92 @@ class wayfire_gsettings : public wf::config_backend_t {
 		loopthread = std::thread(gsettings_loop, fd[1]);
 		wl_event_loop_add_fd(wl_display_get_event_loop(display), fd[0], WL_EVENT_READABLE,
 		                     handle_update, this);
+		{
+			std::unique_lock<std::mutex> lk(init_mtx);
+			init_cv.wait(lk, [] { return init_done; });
+			apply_update(this);
+		}
 	}
 
 	void load_settings() {}
 };
 
 static void apply_field(const wayfire_gsettings *ctx, GVariant *val, const std::string &sec,
-                        const std::string &key) {
-	auto opt = ctx->config->get_section(sec)->get_option(key);
+                        const std::string &key, bool make_new) {
 	const auto *typ = g_variant_get_type(val);
-	if (opt == nullptr) {
-		LOGI("GSettings update found nullptr opt: ", sec.c_str(), "/", key.c_str());
-	} else if (g_variant_type_equal(typ, G_VARIANT_TYPE_STRING)) {
-		opt->set_value_str(std::string(g_variant_get_string(val, NULL)));
-	} else if (g_variant_type_equal(typ, G_VARIANT_TYPE_BOOLEAN)) {
-		auto topt = std::dynamic_pointer_cast<wf::config::option_t<bool>>(opt);
-		if (topt == nullptr) {
-			LOGW("GSettings update could not cast opt to bool: ", sec.c_str(), "/", key.c_str());
+#define GET_THE_OPT                                                              \
+	auto opt = ctx->config->get_section(sec)->get_option_or(key);                  \
+	if (!opt && !make_new) {                                                       \
+		LOGW("GSettings update found nullptr opt: ", sec.c_str(), "/", key.c_str()); \
+		return;                                                                      \
+	}
+	if (g_variant_type_equal(typ, G_VARIANT_TYPE_STRING)) {
+		GET_THE_OPT;
+		std::string str_val(g_variant_get_string(val, NULL));
+		if (opt) {
+			opt->set_value_str(str_val);
 		} else {
-			topt->set_value(g_variant_get_boolean(val));
+			auto opt = std::make_shared<wf::config::option_t<std::string>>(key, str_val);
+			ctx->config->get_section(sec)->register_new_option(opt);
+		}
+	} else if (g_variant_type_equal(typ, G_VARIANT_TYPE_BOOLEAN)) {
+		GET_THE_OPT;
+		if (opt) {
+			auto topt = std::dynamic_pointer_cast<wf::config::option_t<bool>>(opt);
+			if (topt == nullptr) {
+				LOGW("GSettings update could not cast opt to bool: ", sec.c_str(), "/", key.c_str());
+			} else {
+				topt->set_value(g_variant_get_boolean(val));
+			}
+		} else {
+			auto opt = std::make_shared<wf::config::option_t<bool>>(key, g_variant_get_boolean(val));
+			ctx->config->get_section(sec)->register_new_option(opt);
 		}
 	} else if (g_variant_type_equal(typ, G_VARIANT_TYPE_INT32)) {
-		auto topt = std::dynamic_pointer_cast<wf::config::option_t<int>>(opt);
-		if (topt == nullptr) {
-			LOGW("GSettings update could not cast opt to int: ", sec.c_str(), "/", key.c_str());
+		GET_THE_OPT;
+		if (opt) {
+			auto topt = std::dynamic_pointer_cast<wf::config::option_t<int>>(opt);
+			if (topt == nullptr) {
+				LOGW("GSettings update could not cast opt to int: ", sec.c_str(), "/", key.c_str());
+			} else {
+				topt->set_value(g_variant_get_int32(val));
+			}
 		} else {
-			topt->set_value(g_variant_get_int32(val));
+			auto opt = std::make_shared<wf::config::option_t<int>>(key, g_variant_get_int32(val));
+			ctx->config->get_section(sec)->register_new_option(opt);
 		}
 	} else if (g_variant_type_equal(typ, G_VARIANT_TYPE_DOUBLE)) {
-		auto topt = std::dynamic_pointer_cast<wf::config::option_t<double>>(opt);
-		if (topt == nullptr) {
-			LOGW("GSettings update could not cast opt to double: ", sec.c_str(), "/", key.c_str());
+		GET_THE_OPT;
+		if (opt) {
+			auto topt = std::dynamic_pointer_cast<wf::config::option_t<double>>(opt);
+			if (topt == nullptr) {
+				LOGW("GSettings update could not cast opt to double: ", sec.c_str(), "/", key.c_str());
+			} else {
+				topt->set_value(static_cast<float>(g_variant_get_double(val)));
+			}
 		} else {
-			topt->set_value(static_cast<float>(g_variant_get_double(val)));
+			auto opt = std::make_shared<wf::config::option_t<double>>(
+			    key, static_cast<float>(g_variant_get_double(val)));
+			ctx->config->get_section(sec)->register_new_option(opt);
 		}
 	} else if (g_variant_type_equal(typ, G_VARIANT_TYPE("(dddd)"))) {
-		auto topt = std::dynamic_pointer_cast<wf::config::option_t<wf::color_t>>(opt);
-		if (topt == nullptr) {
-			LOGW("GSettings update could not cast opt to color: ", sec.c_str(), "/", key.c_str());
+		GET_THE_OPT;
+
+		wf::color_t color{static_cast<float>(g_variant_get_double(g_variant_get_child_value(val, 0))),
+		                  static_cast<float>(g_variant_get_double(g_variant_get_child_value(val, 1))),
+		                  static_cast<float>(g_variant_get_double(g_variant_get_child_value(val, 2))),
+		                  static_cast<float>(g_variant_get_double(g_variant_get_child_value(val, 3)))};
+
+		if (opt) {
+			auto topt = std::dynamic_pointer_cast<wf::config::option_t<wf::color_t>>(opt);
+			if (topt == nullptr) {
+				LOGW("GSettings update could not cast opt to color: ", sec.c_str(), "/", key.c_str());
+			} else {
+				topt->set_value(color);
+			}
 		} else {
-			topt->set_value(
-			    wf::color_t{static_cast<float>(g_variant_get_double(g_variant_get_child_value(val, 0))),
-			                static_cast<float>(g_variant_get_double(g_variant_get_child_value(val, 1))),
-			                static_cast<float>(g_variant_get_double(g_variant_get_child_value(val, 2))),
-			                static_cast<float>(g_variant_get_double(g_variant_get_child_value(val, 3)))});
+			auto opt = std::make_shared<wf::config::option_t<wf::color_t>>(key, color);
+			ctx->config->get_section(sec)->register_new_option(opt);
 		}
 	} else if (g_variant_type_is_array(typ)) {
 		GVariant *child = nullptr;
@@ -213,10 +268,28 @@ static void apply_field(const wayfire_gsettings *ctx, GVariant *val, const std::
 		unsigned int i = 0;
 		g_variant_iter_init(&iter, val);
 		while ((child = g_variant_iter_next_value(&iter))) {
-			apply_field(ctx, child, sec, key + "_" + std::to_string(++i));
+			std::string k = key + "_" + std::to_string(++i);
+			apply_field(ctx, child, sec, k, true);
 		}
 	} else {
 		LOGI("GSettings update has unsupported type: ", sec.c_str(), "/", key.c_str());
+	}
+#undef GET_THE_OPT
+}
+
+static void apply_update(const wayfire_gsettings *ctx) {
+	while (!changes.empty()) {
+		auto chg = changes.front();
+		// GSettings does not support underscores
+		std::replace(chg.key.begin(), chg.key.end(), '-', '_');
+		try {
+			apply_field(ctx, chg.val, chg.sec, chg.key, false);
+		} catch (std::invalid_argument &e) {
+			LOGE("GSettings update could not apply: ", chg.sec.c_str(), "/", chg.key.c_str(), ": ",
+			     e.what());
+		}
+		g_variant_unref(chg.val);
+		changes.pop();
 	}
 }
 
@@ -224,21 +297,11 @@ static int handle_update(int fd, uint32_t /* mask */, void *data) {
 	auto *ctx = reinterpret_cast<wayfire_gsettings *>(data);
 	char buff;
 	read(fd, &buff, 1);
-	while (!changes.empty()) {
-		auto chg = changes.front();
-		// GSettings does not support underscores
-		std::replace(chg.key.begin(), chg.key.end(), '-', '_');
-		try {
-			apply_field(ctx, chg.val, chg.sec, chg.key);
-		} catch (std::invalid_argument &e) {
-			LOGE("GSettings update could not apply: ", chg.sec.c_str(), "/", chg.key.c_str());
-		}
-		g_variant_unref(chg.val);
-		changes.pop();
-	}
+	apply_update(ctx);
 	// The signal triggers relatively heavy stuff like cursor theme loading
-	// Firing it per value e.g. when initially applying everything is a bad idea
-	// TODO: if possible, add more efficient way to wayfire, without readding source
+	// Firing it per value is not the best idea
+	// TODO: if possible, add more efficient way to wayfire, without readding source (UPD: return
+	// true?)
 	ctx->sig_debounce.disconnect();
 	ctx->sig_debounce.set_timeout(69, []() {
 		wf::get_core().emit_signal("reload-config", nullptr);
