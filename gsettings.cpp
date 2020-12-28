@@ -6,13 +6,13 @@
 #include <queue>
 #include <thread>
 #include <unordered_map>
+#include <wayfire/config-backend.hpp>
+#include <wayfire/config/file.hpp>
 #include <wayfire/core.hpp>
 #include <wayfire/debug.hpp>
 #include <wayfire/output.hpp>
 #include <wayfire/plugin.hpp>
-#include <wayfire/config-backend.hpp>
 #include <wayfire/util/log.hpp>
-#include <wayfire/config/file.hpp>
 
 struct conf_change {
 	std::string sec;
@@ -146,29 +146,25 @@ static void gsettings_loop(int fd) {
 
 static int handle_update(int fd, uint32_t /* mask */, void *data);
 
-class wayfire_gsettings : public wf::config_backend_t
-{
-  public:
+class wayfire_gsettings : public wf::config_backend_t {
+ public:
 	std::thread loopthread;
 	int fd[2] = {0, 0};
 	wf::wl_timer sig_debounce;
 	wf::config::config_manager_t *config;
 
-	void init(wl_display *display, wf::config::config_manager_t& config,
-		const std::string&) override
-	{
+	void init(wl_display *display, wf::config::config_manager_t &config,
+	          const std::string &) override {
 		this->config = &config;
-		config = wf::config::build_configuration(
-			get_xml_dirs(), "", "");
+		config = wf::config::build_configuration(get_xml_dirs(), "", "");
 
 		pipe(fd);
 		loopthread = std::thread(gsettings_loop, fd[1]);
-		wl_event_loop_add_fd(wl_display_get_event_loop(display),
-			fd[0], WL_EVENT_READABLE, handle_update, this);
+		wl_event_loop_add_fd(wl_display_get_event_loop(display), fd[0], WL_EVENT_READABLE,
+		                     handle_update, this);
 	}
 
-    void load_settings() {
-    }
+	void load_settings() {}
 };
 
 static int handle_update(int fd, uint32_t /* mask */, void *data) {
