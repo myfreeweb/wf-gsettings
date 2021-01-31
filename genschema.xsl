@@ -39,14 +39,14 @@
 					<xsl:when test="@type = 'double'">d</xsl:when>
 					<xsl:when test="@type = 'color'">(dddd)</xsl:when>
 					<xsl:when test="@type = 'key' or @type = 'button' or @type = 'gesture' or @type = 'activator' or @type = 'output::mode' or @type = 'output::position' or @type = 'string'">s</xsl:when>
-					<xsl:when test="@type = 'dynamic_list'">a<xsl:choose>
-							<xsl:when test="type = 'int'">i</xsl:when>
-							<xsl:when test="type = 'bool'">b</xsl:when>
-							<xsl:when test="type = 'double'">d</xsl:when>
-							<xsl:when test="type = 'color'">(dddd)</xsl:when>
-							<xsl:when test="type = 'key' or type = 'button' or type = 'gesture' or type = 'activator' or @type = 'output::mode' or @type = 'output::position' or type = 'string'">s</xsl:when>
-						</xsl:choose>
-					</xsl:when>
+					<xsl:when test="@type = 'dynamic_list'">s</xsl:when> <!-- old unsupported -->
+					<xsl:when test="@type = 'dynamic-list'">a{s(<xsl:for-each select="entry"><xsl:choose>
+							<xsl:when test="@type = 'int'">i</xsl:when>
+							<xsl:when test="@type = 'bool'">b</xsl:when>
+							<xsl:when test="@type = 'double'">d</xsl:when>
+							<xsl:when test="@type = 'color'">(dddd)</xsl:when>
+							<xsl:when test="@type = 'key' or @type = 'button' or @type = 'gesture' or @type = 'activator' or @type = 'output::mode' or @type = 'output::position' or @type = 'string'">s</xsl:when>
+						</xsl:choose></xsl:for-each>)}</xsl:when>
 				</xsl:choose>
 			</xsl:attribute>
 			<default>
@@ -65,7 +65,8 @@
 					<xsl:when test="@type = 'double'">0.0</xsl:when>
 					<xsl:when test="@type = 'color'">(0.0,0.0,0.0,0.0)</xsl:when>
 					<xsl:when test="@type = 'key' or @type = 'button' or @type = 'gesture' or @type = 'activator' or @type = 'string'">''</xsl:when>
-					<xsl:when test="@type = 'dynamic_list'">[]</xsl:when>
+					<xsl:when test="@type = 'dynamic_list'">''</xsl:when> <!-- old unsupported -->
+					<xsl:when test="@type = 'dynamic-list'">{}</xsl:when>
 				</xsl:choose>
 			</default>
 			<summary><xsl:value-of select="_short"/></summary>

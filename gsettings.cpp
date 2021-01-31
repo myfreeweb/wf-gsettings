@@ -263,18 +263,48 @@ static void apply_field(const wayfire_gsettings *ctx, GVariant *val, const std::
 			ctx->config->get_section(sec)->register_new_option(opt);
 		}
 	} else if (g_variant_type_is_array(typ)) {
-		GVariant *child = nullptr;
-		GVariantIter iter;
-		unsigned int i = 0;
-		g_variant_iter_init(&iter, val);
-		while ((child = g_variant_iter_next_value(&iter))) {
-			std::string k = key + "_" + std::to_string(++i);
-			apply_field(ctx, child, sec, k, true);
+		GET_THE_OPT;
+		if (!opt) {
+			LOGW("GSettings does not support creating dynamic-list options that don't exist: ",
+			     sec.c_str(), "/", key.c_str());
+			return;
+		}
+		auto topt = std::dynamic_pointer_cast<wf::config::compound_option_t>(opt);
+		if (topt == nullptr) {
+			LOGW("GSettings update could not cast opt to dynamic-list: ", sec.c_str(), "/", key.c_str());
+		} else {
+			wf::config::compound_option_t::stored_type_t entries;
+			gchar *entry_key = nullptr;
+			GVariant *entry_val = nullptr;
+			GVariantIter iter;
+			g_variant_iter_init(&iter, val);
+			while (g_variant_iter_loop(&iter, "{s*}", &entry_key, &entry_val)) {
+				std::vector<std::string> &entry = entries.emplace_back();
+				entry.push_back(std::string(entry_key));
+				for (size_t i = 0; i < g_variant_n_children(entry_val); i++) {
+					g_autoptr(GVariant) v = g_variant_get_child_value(entry_val, i);
+					const auto *etyp = g_variant_get_type(v);
+					if (g_variant_type_equal(etyp, G_VARIANT_TYPE_STRING)) {
+						entry.push_back(std::string(g_variant_get_string(v, NULL)));
+					} else if (g_variant_type_equal(etyp, G_VARIANT_TYPE_BOOLEAN)) {
+						entry.push_back(g_variant_get_boolean(v) ? "1" : "0");
+					} else if (g_variant_type_equal(etyp, G_VARIANT_TYPE_INT32)) {
+						entry.push_back(std::to_string(g_variant_get_int32(v)));
+					} else if (g_variant_type_equal(etyp, G_VARIANT_TYPE_DOUBLE)) {
+						entry.push_back(std::to_string(g_variant_get_double(v)));
+					} else {
+						LOGI("GSettings update has unsupported type in dynamic-list: ", sec.c_str(), "/",
+						     key.c_str(), " key: ", entry_key, " item idx: ", i);
+					}
+				}
+			}
+			if (!topt->set_value_untyped(entries)) {
+				LOGW("GSettings failed to apply dynamic-list options: ", sec.c_str(), "/", key.c_str());
+			}
 		}
 	} else {
 		LOGI("GSettings update has unsupported type: ", sec.c_str(), "/", key.c_str());
 	}
-#undef GET_THE_OPT
 }
 
 static void apply_update(const wayfire_gsettings *ctx) {
