@@ -75,6 +75,13 @@
 				<xsl:when test="min"><range min="{min}"/></xsl:when>
 				<xsl:when test="max"><range max="{max}"/></xsl:when>
 			</xsl:choose>
+			<xsl:if test="desc">
+				<choices>
+					<xsl:for-each select="desc">
+						<choice value="{value}"/>
+					</xsl:for-each>
+				</choices>
+			</xsl:if>
 		</key>
 	</xsl:template>
 
